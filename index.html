@@ -144,7 +144,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
     <p style="font-size:13px">Если кнопка не сработала: нажми ⋮ вверху справа → «Открыть в браузере».</p>
   </div>
   <p class="err" id="err" hidden></p>
-  <p style="font-size:11px;opacity:.45;margin:0">версия 6</p>
+  <p style="font-size:11px;opacity:.45;margin:0">версия 7</p>
 </div>
 
 <div class="topbar" id="topbar" hidden>
@@ -558,30 +558,74 @@ function attachConn(c){
 function attachCall(c){
   if(call&&call!==c){try{call.close()}catch{}}
   call=c;
-  const pc=c.peerConnection;
-  if(pc)pc.addEventListener("iceconnectionstatechange",()=>{if(call===c&&(pc.iceConnectionState==="failed"||pc.iceConnectionState==="closed"))dropPartner()});
+  let gotStream=false,connected=false,dropTimer=0;
+  const goLive=()=>{
+    if(call!==c||paired||!gotStream||!connected)return;
+    failCount=0;setPaired(true);
+    remoteV.play().catch(()=>flash("Нажми на экран, чтобы включить звук",6000));
+    flash("Вы на связи! Чмокайте 💋");
+  };
+  const watch=pc=>{
+    if(!pc||pc.__watched)return;pc.__watched=true;
+    const st=()=>pc.iceConnectionState;
+    pc.addEventListener("iceconnectionstatechange",()=>{
+      if(call!==c)return;
+      if(st()==="connected"||st()==="completed"){connected=true;clearTimeout(dropTimer);goLive()}
+      else if(st()==="disconnected"){clearTimeout(dropTimer);dropTimer=setTimeout(()=>{if(call===c&&st()!=="connected"&&st()!=="completed")dropPartner("lost")},6000)}
+      else if(st()==="failed")dropPartner("failed");
+    });
+    if(st()==="connected"||st()==="completed")connected=true;
+  };
+  watch(c.peerConnection);
   c.on("stream",st=>{
     lastSeen=performance.now();
+    watch(c.peerConnection);
     remoteV.srcObject=st;
-    remoteV.play().catch(()=>flash("Нажми на экран, чтобы включить звук",6000));
     feedRecording("remote",st);
-    setPaired(true);
-    flash("Вы на связи! Чмокайте 💋");
+    gotStream=true;
+    if(!paired){$("invite").hidden=true;setStatus("Соединяю видео…")}
+    goLive();
+    // если за 20 с видео так и не пошло — сеть не пускает, пробуем заново
+    setTimeout(()=>{if(call===c&&!connected)dropPartner("failed")},20000);
   });
   c.on("close",()=>{if(call===c){call=null;dropPartner()}});
   c.on("error",()=>{});
 }
-function dropPartner(){
+let failCount=0;
+function dropPartner(why){
   if(!paired&&!call&&!conn)return;
+  if(why==="failed"){
+    failCount++;
+    flash(failCount>=2?"Видео не проходит между вашими сетями. Попробуйте подключиться обоим к Wi-Fi или одному с мобильного интернета":"Не удалось соединить видео, пробую ещё раз…",8000);
+  }else if(why==="lost")flash("Связь прервалась, переподключаюсь…");
   try{call?.close()}catch{};try{conn?.close()}catch{}
   call=null;conn=null;remoteV.srcObject=null;
   setPaired(false);
   if(busy){$("invite").hidden=true;setStatus("В комнате уже двое");setTimeout(()=>{busy=false;connectToHost()},10000);return}
-  if(!isHost){setStatus("Связь потерялась, переподключаюсь…");setTimeout(connectToHost,1500)}
+  if(!isHost){setStatus("Переподключаюсь…");setTimeout(connectToHost,failCount>=2?6000:1500)}
 }
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+// Если телефоны в разных сетях (мобильный интернет, роутеры), напрямую видео часто не проходит.
+// Тогда оно идёт через бесплатный ретранслятор Open Relay (TURN). Пароль к нему одноразовый, считаем его здесь.
+const TURN_HOST="staticauth.openrelay.metered.ca", TURN_SECRET="openrelayprojectsecret";
+const STUN=[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun.cloudflare.com:3478"}];
+let ICE=STUN;
+async function buildIce(){
+  try{
+    const username=(Math.floor(Date.now()/1000)+12*3600)+":chmok";
+    const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(TURN_SECRET),{name:"HMAC",hash:"SHA-1"},false,["sign"]);
+    const sig=new Uint8Array(await crypto.subtle.sign("HMAC",key,new TextEncoder().encode(username)));
+    const credential=btoa(String.fromCharCode(...sig));
+    return [...STUN,{urls:[
+      "turn:"+TURN_HOST+":80",
+      "turn:"+TURN_HOST+":80?transport=tcp",
+      "turn:"+TURN_HOST+":443",
+      "turns:"+TURN_HOST+":443?transport=tcp"
+    ],username,credential}];
+  }catch{return STUN}
+}
 function peerOptions(){
-  const o={config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]}};
+  const o={config:{iceServers:ICE}};
   const ph=params.get("ph");if(ph){const [host,port]=ph.split(":");Object.assign(o,{host,port:+port||9000,path:"/",secure:false})}
   return o;
 }
@@ -638,7 +682,8 @@ function handlePeerError(e){
   setStatus("Ошибка связи: "+e.type);
 }
 async function startRoom(){
-  await loadScript(PEERJS);
+  const [ice]=await Promise.all([buildIce(),loadScript(PEERJS)]);
+  ICE=ice;
   roomCode=roomFromLink||newCode();
   if(!roomFromLink)history.replaceState(null,"","#r-"+roomCode);
   $("roomUrl").textContent=roomLink();
