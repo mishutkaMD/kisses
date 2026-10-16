@@ -138,8 +138,13 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
   <div class="btns" id="joinBtns" hidden>
     <button class="btn" id="goJoin" type="button">Войти и чмокаться</button>
   </div>
-  <p class="err" id="tgNote" hidden>Ты открыл ссылку внутри Telegram. Там камера и звонок часто не работают: нажми ⋮ вверху справа → «Открыть в браузере».</p>
+  <div class="btns" id="tgBox" hidden>
+    <p class="err">Ссылка открыта внутри Telegram, а он не даёт камеру. Открой её в настоящем браузере.</p>
+    <a class="btn" id="openChrome" href="#" style="text-decoration:none;text-align:center">Открыть в Chrome</a>
+    <p style="font-size:13px">Если кнопка не сработала: нажми ⋮ вверху справа → «Открыть в браузере».</p>
+  </div>
   <p class="err" id="err" hidden></p>
+  <p style="font-size:11px;opacity:.45;margin:0">версия 6</p>
 </div>
 
 <div class="topbar" id="topbar" hidden>
@@ -200,7 +205,9 @@ const $=id=>document.getElementById(id);
 const selfV=$("self"), remoteV=$("remote"), cv=$("fx"), ctx=cv.getContext("2d");
 const bar=$("bar"), countEl=$("count");
 const params=new URLSearchParams(location.search);
-const roomFromLink=(location.hash.match(/^#r-([a-z0-9]{4,12})$/)||[])[1]||null;
+const isCode=c=>/^[a-z0-9]{4,12}$/.test(c||"");
+// комната берётся из #r-код (обычная ссылка) или ?r=код (так её открывает Chrome из Telegram)
+const roomFromLink=(location.hash.match(/^#r-([a-z0-9]{4,12})$/)||[])[1]||(isCode(params.get("r"))?params.get("r"):null);
 
 let W=0,H=0,DPR=1;
 function resize(){
@@ -579,7 +586,8 @@ function peerOptions(){
   return o;
 }
 function newCode(){const a="abcdefghjkmnpqrstuvwxyz23456789";let s="";for(let i=0;i<7;i++)s+=a[(Math.random()*a.length)|0];return s}
-function roomLink(){return location.origin+location.pathname+location.search+"#r-"+roomCode}
+function cleanSearch(){const q=new URLSearchParams(location.search);q.delete("r");const t=q.toString();return t?"?"+t:""}
+function roomLink(){return location.origin+location.pathname+cleanSearch()+"#r-"+roomCode}
 
 // Кто первым открыл комнату, тот её «держит»; второй подключается к нему
 function openRoom(){
@@ -735,7 +743,21 @@ if(roomFromLink){
   $("introBtns").hidden=true;$("joinBtns").hidden=false;
 }
 const inTelegram=/Telegram/i.test(navigator.userAgent)||!!window.TelegramWebviewProxy;
-if(inTelegram){const n=$("tgNote");n.hidden=false}
+const isAndroid=/Android/i.test(navigator.userAgent);
+if(inTelegram){
+  $("tgBox").hidden=false;
+  // главное действие здесь — уйти в браузер, поэтому обычные кнопки делаем второстепенными
+  ["goPair","goJoin"].forEach(id=>$(id).classList.add("ghost"));
+  $("intro").insertBefore($("tgBox"),$("introBtns"));
+  const q=new URLSearchParams(location.search);if(roomFromLink)q.set("r",roomFromLink);
+  const qs=q.toString();
+  const target=location.host+location.pathname+(qs?"?"+qs:"");
+  const a=$("openChrome");
+  if(isAndroid)a.href="intent://"+target+"#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url="+encodeURIComponent("https://"+target)+";end";
+  else{a.href="https://"+target;a.target="_blank";a.textContent="Открыть в Safari"}
+  const show=$("err");
+  a.addEventListener("click",()=>setTimeout(()=>{show.textContent="Если браузер не открылся, нажми ⋮ (или ···) вверху → «Открыть в браузере».";show.hidden=false},1500));
+}
 function withTimeout(pr,ms){return Promise.race([pr,new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error("timeout"),{name:"Timeout"})),ms))])}
 // Пробуем по очереди: камера+микрофон → попроще → только камера. Некоторые телефоны и встроенные браузеры не дают микрофон.
 async function getCamera(pair){
