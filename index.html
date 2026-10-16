@@ -76,6 +76,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
   font-family:var(--display);font-size:14px;font-variant-numeric:tabular-nums}
 .timer::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--rec);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.25}}
+.diag{position:fixed;z-index:5;left:16px;right:16px;top:calc(50px + env(safe-area-inset-top,0px));text-align:center;font:600 10px/1.3 ui-monospace,Menlo,monospace;color:var(--ink);opacity:.75;text-shadow:0 1px 4px rgba(0,0,0,.9);pointer-events:none;overflow-wrap:anywhere}
 .hint{position:fixed;z-index:5;top:calc(62px + env(safe-area-inset-top,0px));left:16px;right:16px;text-align:center;font-size:14px;color:var(--ink);text-shadow:0 1px 8px rgba(0,0,0,.8);pointer-events:none;transition:opacity .6s}
 
 .invite{position:fixed;z-index:6;left:50%;top:50%;transform:translate(-50%,-50%);width:min(calc(100vw - 32px),380px);
@@ -144,7 +145,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
     <p style="font-size:13px">Если кнопка не сработала: нажми ⋮ вверху справа → «Открыть в браузере».</p>
   </div>
   <p class="err" id="err" hidden></p>
-  <p style="font-size:11px;opacity:.45;margin:0">версия 7</p>
+  <p style="font-size:11px;opacity:.45;margin:0" id="ver">версия 8</p>
 </div>
 
 <div class="topbar" id="topbar" hidden>
@@ -155,6 +156,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
   </div>
   <button class="chip sm right" id="linkBtn" type="button" hidden>Ссылка</button>
 </div>
+<div class="diag" id="diag" hidden></div>
 <div class="hint" id="hint" hidden></div>
 
 <div class="invite" id="invite" hidden>
@@ -194,6 +196,21 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
 <script type="module">
 const VISION="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODEL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const VER="8";
+// Telegram и браузеры любят показывать старую версию из кэша. Проверяем, нет ли свежей, и если есть — перезагружаемся на неё.
+(async()=>{
+  try{
+    const r=await fetch(location.pathname+"?check="+Date.now(),{cache:"no-store"});
+    const fresh=(/const VER="(\d+)"/.exec(await r.text())||[])[1];
+    if(fresh&&+fresh>+VER){
+      const key="chmok-upd-"+fresh;
+      if(sessionStorage.getItem(key))return;
+      sessionStorage.setItem(key,"1");
+      const q=new URLSearchParams(location.search);q.set("u",fresh);
+      location.replace(location.pathname+"?"+q.toString()+location.hash);
+    }
+  }catch{}
+})();
 const PEERJS="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js";
 const ROOM_PREFIX="chmokkiss-";
 // Распознавание идёт ~15 раз в секунду на маленькой копии кадра: этого хватает для поцелуя и сильно разгружает телефон
@@ -515,7 +532,7 @@ function loop(now){
 }
 // тап по окну — сердечки из этого места
 cv.addEventListener("pointerdown",e=>{
-  if(remoteV.paused&&paired)remoteV.play().catch(()=>{});
+  if(paired&&(remoteV.paused||needUnmute)){needUnmute=false;remoteV.muted=false;remoteV.play().catch(()=>{})}
   const v=tileAt(e.clientX,e.clientY);
   const p=fromScreen(v,e.clientX,e.clientY);
   if(v===selfV)myKiss(p.x,p.y);
@@ -544,8 +561,17 @@ function onMsg(m){
 }
 function setPaired(on){
   paired=on;document.body.classList.toggle("paired",on);
-  $("invite").hidden=on||!roomCode;
+  $("invite").hidden=on||!roomCode||!isHost;
   setStatus(on?"На связи":"Ждём её…",on);
+}
+let needUnmute=false;
+function playRemote(){
+  remoteV.muted=false;
+  remoteV.play().catch(()=>{
+    remoteV.muted=true;needUnmute=true;
+    remoteV.play().catch(()=>{});
+    flash("Нажми на экран, чтобы включить её звук",8000);
+  });
 }
 function attachConn(c){
   if(conn&&conn!==c){try{conn.close()}catch{}}
@@ -562,11 +588,13 @@ function attachCall(c){
   const goLive=()=>{
     if(call!==c||paired||!gotStream||!connected)return;
     failCount=0;setPaired(true);
-    remoteV.play().catch(()=>flash("Нажми на экран, чтобы включить звук",6000));
+    playRemote();
     flash("Вы на связи! Чмокайте 💋");
   };
   const watch=pc=>{
     if(!pc||pc.__watched)return;pc.__watched=true;
+    mediaPC=pc;cand={host:0,srflx:0,relay:0};
+    pc.addEventListener("icecandidate",e=>{const t=e.candidate?.type||(/ typ (\w+)/.exec(e.candidate?.candidate||"")||[])[1];if(t&&t in cand)cand[t]++});
     const st=()=>pc.iceConnectionState;
     pc.addEventListener("iceconnectionstatechange",()=>{
       if(call!==c)return;
@@ -591,7 +619,19 @@ function attachCall(c){
   c.on("close",()=>{if(call===c){call=null;dropPartner()}});
   c.on("error",()=>{});
 }
-let failCount=0;
+let failCount=0,mediaPC=null,cand={host:0,srflx:0,relay:0},via="—";
+// строка состояния для отладки: по скриншоту видно, на каком шаге застряло
+async function updDiag(){
+  const d=$("diag");if(!roomCode){d.hidden=true;return}
+  d.hidden=recording;
+  const ice=mediaPC?mediaPC.iceConnectionState:"—";
+  if(mediaPC&&(ice==="connected"||ice==="completed")){
+    try{const st=await mediaPC.getStats();let pair=null;st.forEach(r=>{if(r.type==="candidate-pair"&&(r.nominated||r.selected)&&r.state==="succeeded")pair=r});
+      if(pair){const l=st.get(pair.localCandidateId);via=l?.candidateType==="relay"?"ретранслятор":"напрямую"}}catch{}
+  }
+  d.textContent=`v${VER} · ${isHost?"создал":"гость"} · сервер:${peer&&!peer.disconnected?"ок":"нет"} · канал:${conn?.open?"ок":"нет"} · видео:${ice} · кандидаты ${cand.host}/${cand.srflx}/${cand.relay} · ${via} · кадр:${remoteV.videoWidth||0}`;
+}
+setInterval(updDiag,1000);
 function dropPartner(why){
   if(!paired&&!call&&!conn)return;
   if(why==="failed"){
@@ -630,7 +670,7 @@ function peerOptions(){
   return o;
 }
 function newCode(){const a="abcdefghjkmnpqrstuvwxyz23456789";let s="";for(let i=0;i<7;i++)s+=a[(Math.random()*a.length)|0];return s}
-function cleanSearch(){const q=new URLSearchParams(location.search);q.delete("r");const t=q.toString();return t?"?"+t:""}
+function cleanSearch(){const q=new URLSearchParams(location.search);q.delete("r");q.delete("u");const t=q.toString();return t?"?"+t:""}
 function roomLink(){return location.origin+location.pathname+cleanSearch()+"#r-"+roomCode}
 
 // Кто первым открыл комнату, тот её «держит»; второй подключается к нему
