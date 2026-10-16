@@ -519,7 +519,7 @@ let peer=null,conn=null,call=null,paired=false,roomCode=null,localStream=null,is
 function setStatus(text,ok){const s=$("status");s.textContent=text;s.classList.toggle("ok",!!ok);s.hidden=recording}
 function send(msg){try{if(conn&&conn.open)conn.send(msg)}catch{}}
 // раз в 2 с шлём «я тут»; если от неё 7 с тишина — значит, она вышла
-let lastSeen=0;
+let lastSeen=0,busy=false;
 setInterval(()=>{
   if(!conn)return;
   send({t:"hb"});
@@ -527,6 +527,7 @@ setInterval(()=>{
 },2000);
 function onMsg(m){
   lastSeen=performance.now();
+  if(m&&m.t==="busy"){busy=true;setStatus("В комнате уже двое");flash("В этой комнате уже двое. Попроси новую ссылку",8000);return}
   if(!m||m.t!=="k")return;
   const x=+m.x,y=+m.y;if(!isFinite(x)||!isFinite(y))return;
   // o:"s" — это её поцелуй (из её окна), o:"r" — она тапнула по моему окну
@@ -567,6 +568,7 @@ function dropPartner(){
   try{call?.close()}catch{};try{conn?.close()}catch{}
   call=null;conn=null;remoteV.srcObject=null;
   setPaired(false);
+  if(busy){$("invite").hidden=true;setStatus("В комнате уже двое");setTimeout(()=>{busy=false;connectToHost()},10000);return}
   if(!isHost){setStatus("Связь потерялась, переподключаюсь…");setTimeout(connectToHost,1500)}
 }
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
@@ -588,8 +590,15 @@ function openRoom(){
       if(e.type==="unavailable-id"){try{p.destroy()}catch{};res(false);return}
       if(peer===p)handlePeerError(e);else{try{p.destroy()}catch{};res(null)}
     });
-    p.on("connection",attachConn);
-    p.on("call",c=>{c.answer(localStream);attachCall(c)});
+    // в комнате максимум двое: пока вы на связи, третьего не пускаем
+    p.on("connection",c=>{
+      if(paired&&conn&&conn.open){c.on("open",()=>{try{c.send({t:"busy"})}catch{};setTimeout(()=>{try{c.close()}catch{}},800)});return}
+      attachConn(c);
+    });
+    p.on("call",c=>{
+      if(paired&&call){try{c.close()}catch{};return}
+      c.answer(localStream);attachCall(c);
+    });
     p.on("disconnected",()=>{try{p.reconnect()}catch{}});
   });
 }
