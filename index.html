@@ -138,7 +138,9 @@ video#cam{display:none}
 const VISION="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODEL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 // Порог: выше ON — поцелуй, ниже OFF — губы расслаблены (гистерезис против дребезга)
-const ON=0.45, OFF=0.25, COOLDOWN=280;
+const ON=0.34, OFF=0.18, COOLDOWN=220;
+// Распознавание идёт на уменьшенной копии кадра — так в разы быстрее на телефоне
+const DET_LONG=320;
 
 const $=id=>document.getElementById(id);
 const video=$("cam"), cv=$("stage"), ctx=cv.getContext("2d");
@@ -327,7 +329,7 @@ const toScreen=(lx,ly)=>({x:W-(map.ox+lx*map.dw),y:map.oy+ly*map.dh});
 
 // До двух лиц. У каждого свой «слот» со своим состоянием, лица сопоставляются с прошлым кадром по ближайшему рту
 const MAX_FACES=2;
-const slots=Array.from({length:MAX_FACES},()=>({x:0,y:0,ok:false,armed:true,lastFire:0}));
+const slots=Array.from({length:MAX_FACES},()=>({x:0,y:0,ok:false,armed:true,lastFire:0,base:0}));
 function assign(mouths){
   const used=new Set(),out=new Array(MAX_FACES).fill(null);
   // сначала даём каждому видимому слоту ближайший рот
@@ -347,29 +349,60 @@ function assign(mouths){
   return out;
 }
 
-let landmarker=null,lastVT=-1,prev=performance.now();
+let landmarker=null,lastVT=-1,prev=performance.now(),nextDetect=0;
+const det=document.createElement("canvas"),dctx=det.getContext("2d",{willReadFrequently:false});
+const clamp01=v=>v<0?0:v>1?1:v;
+
+function detect(now){
+  const vw=video.videoWidth,vh=video.videoHeight;
+  const k=DET_LONG/Math.max(vw,vh);
+  const w=Math.round(vw*k),h=Math.round(vh*k);
+  if(det.width!==w||det.height!==h){det.width=w;det.height=h}
+  dctx.drawImage(video,0,0,w,h);
+  const t0=performance.now();
+  const r=landmarker.detectForVideo(det,now);
+  const dur=performance.now()-t0;
+  // если телефон не успевает, пропускаем кадр распознавания, но анимацию рисуем всегда
+  nextDetect=dur>18?now+dur:0;
+
+  const mouths=(r.faceLandmarks||[]).map((L,fi)=>{
+    const a=toScreen(L[13].x,L[13].y),b=toScreen(L[14].x,L[14].y);
+    const bs=r.faceBlendshapes?.[fi]?.categories||[];
+    const get=n=>bs.find(c=>c.categoryName===n)?.score||0;
+    const px=i=>[L[i].x*vw,L[i].y*vh];
+    const d=(i,j)=>{const[p,q]=[px(i),px(j)];return Math.hypot(p[0]-q[0],p[1]-q[1])};
+    return {
+      x:(a.x+b.x)/2,y:(a.y+b.y)/2,
+      blend:Math.max(get("mouthPucker"),get("mouthFunnel")*0.85),
+      smile:Math.max(get("mouthSmileLeft"),get("mouthSmileRight")),
+      jaw:get("jawOpen"),
+      ratio:d(61,291)/d(234,454) // ширина рта относительно ширины лица: при поцелуе заметно уменьшается
+    };
+  });
+  const got=assign(mouths);
+  let maxP=0;
+  slots.forEach((s,i)=>{
+    const m=got[i];
+    if(!m){s.ok=false;s.armed=true;s.base=0;return}
+    s.x=m.x;s.y=m.y;s.ok=true;
+    // запоминаем обычную ширину рта этого человека, пока он не целуется и не улыбается
+    if(!s.base)s.base=m.ratio;
+    else if(m.blend<0.12&&m.smile<0.25&&m.jaw<0.25)s.base+=(m.ratio-s.base)*0.05;
+    const geom=m.smile>0.3?0:clamp01((s.base-m.ratio)/(s.base*0.3));
+    const p=Math.max(m.blend,geom*0.8);
+    maxP=Math.max(maxP,p);
+    if(s.armed&&p>ON&&now-s.lastFire>COOLDOWN){burst(s.x,s.y);s.armed=false;s.lastFire=now}
+    if(p<OFF)s.armed=true;
+  });
+  bar.style.width=Math.min(100,maxP*100)+"%";
+}
+
 function loop(now){
   const dt=Math.min(.05,(now-prev)/1000);prev=now;const t=now/1000;
   drawVideo();
-  if(landmarker&&video.readyState>=2&&video.currentTime!==lastVT){
+  if(landmarker&&video.readyState>=2&&video.currentTime!==lastVT&&now>=nextDetect){
     lastVT=video.currentTime;
-    const r=landmarker.detectForVideo(video,now);
-    const mouths=(r.faceLandmarks||[]).map((L,fi)=>{
-      const a=toScreen(L[13].x,L[13].y),b=toScreen(L[14].x,L[14].y);
-      const bs=r.faceBlendshapes?.[fi]?.categories||[];
-      const get=n=>bs.find(c=>c.categoryName===n)?.score||0;
-      return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,p:Math.max(get("mouthPucker"),get("mouthFunnel")*0.85)};
-    });
-    const got=assign(mouths);
-    let maxP=0;
-    slots.forEach((s,i)=>{
-      const m=got[i];
-      if(!m){s.ok=false;s.armed=true;return}
-      s.x=m.x;s.y=m.y;s.ok=true;maxP=Math.max(maxP,m.p);
-      if(s.armed&&m.p>ON&&now-s.lastFire>COOLDOWN){burst(s.x,s.y);s.armed=false;s.lastFire=now}
-      if(m.p<OFF)s.armed=true;
-    });
-    bar.style.width=Math.min(100,maxP*100)+"%";
+    detect(now);
   }
   for(let i=hearts.length-1;i>=0;i--){
     const h=hearts[i];h.age+=dt;
@@ -401,7 +434,7 @@ function startRec(){
   const stream=cv.captureStream(30);
   recDest.stream.getAudioTracks().forEach(tr=>stream.addTrack(tr));
   const type=pickType();
-  try{rec=new MediaRecorder(stream,type?{mimeType:type,videoBitsPerSecond:5_000_000}:undefined)}
+  try{rec=new MediaRecorder(stream,type?{mimeType:type,videoBitsPerSecond:3_500_000}:undefined)}
   catch{flash("Этот браузер не умеет записывать видео. Попробуй Chrome или Safari.");return}
   chunks=[];
   rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
@@ -451,7 +484,7 @@ $("go").addEventListener("click",async()=>{
     err.textContent="Камера недоступна. Разреши доступ к камере и открой страницу по https-ссылке.";err.hidden=false;return;
   }
   $("intro").hidden=true;$("dock").hidden=false;
-  flash("Тап по экрану тоже выпускает сердце");
+  flash("Загружаю распознавание лица… Тап по экрану уже выпускает сердечки");
   requestAnimationFrame(loop);
   const saved=await loadSound();
   if(saved){try{customBuf=await decode(saved.buf);showSoundState(saved.name)}catch{}}
@@ -461,6 +494,7 @@ $("go").addEventListener("click",async()=>{
     const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numFaces:MAX_FACES,outputFaceBlendshapes:true});
     try{landmarker=await FaceLandmarker.createFromOptions(files,opts("GPU"))}
     catch{landmarker=await FaceLandmarker.createFromOptions(files,opts("CPU"))}
+    flash("Готово, чмокай!");
   }catch{flash("Не загрузилось распознавание лица. Проверь интернет. Тапом сердца работают.")}
 });
 </script>
