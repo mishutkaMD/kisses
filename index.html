@@ -138,6 +138,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
   <div class="btns" id="joinBtns" hidden>
     <button class="btn" id="goJoin" type="button">Войти и чмокаться</button>
   </div>
+  <p class="err" id="tgNote" hidden>Ты открыл ссылку внутри Telegram. Там камера и звонок часто не работают: нажми ⋮ вверху справа → «Открыть в браузере».</p>
   <p class="err" id="err" hidden></p>
 </div>
 
@@ -733,25 +734,56 @@ if(roomFromLink){
   $("introText").textContent="Тебя зовут чмокаться 💋 Нажми «Войти», разреши камеру и микрофон, и вы увидите друг друга.";
   $("introBtns").hidden=true;$("joinBtns").hidden=false;
 }
-async function start(mode){
+const inTelegram=/Telegram/i.test(navigator.userAgent)||!!window.TelegramWebviewProxy;
+if(inTelegram){const n=$("tgNote");n.hidden=false}
+function withTimeout(pr,ms){return Promise.race([pr,new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error("timeout"),{name:"Timeout"})),ms))])}
+// Пробуем по очереди: камера+микрофон → попроще → только камера. Некоторые телефоны и встроенные браузеры не дают микрофон.
+async function getCamera(pair){
+  const tries=pair?[
+    {video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:{echoCancellation:true,noiseSuppression:true}},
+    {video:true,audio:true},
+    {video:{facingMode:"user"},audio:false},
+    {video:true,audio:false}
+  ]:[
+    {video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false},
+    {video:true,audio:false}
+  ];
+  if(!navigator.mediaDevices?.getUserMedia)throw Object.assign(new Error("no api"),{name:"NoApi"});
+  let last;
+  for(const c of tries){
+    try{return await withTimeout(navigator.mediaDevices.getUserMedia(c),15000)}
+    catch(e){last=e;if(e.name==="Timeout"||e.name==="NotFoundError")break}
+  }
+  throw last;
+}
+function cameraError(e,pair){
+  const n=e?.name||"";
+  if(inTelegram||n==="NoApi")return "Встроенный браузер Telegram не даёт камеру. Нажми ⋮ вверху справа → «Открыть в браузере» и попробуй там.";
+  if(n==="Timeout")return "Браузер так и не спросил разрешение на камеру. Открой ссылку в Chrome и попробуй ещё раз.";
+  if(n==="NotAllowedError"||n==="SecurityError")return "Доступ к камере"+(pair?" и микрофону":"")+" запрещён. Нажми на значок слева от адреса сайта → Разрешения → включи камеру"+(pair?" и микрофон":"")+", потом обнови страницу.";
+  if(n==="NotReadableError"||n==="AbortError")return "Камера занята другим приложением (например, звонком или камерой). Закрой его и попробуй снова.";
+  if(n==="NotFoundError"||n==="OverconstrainedError")return "Не нашлась фронтальная камера.";
+  return "Камера не включилась ("+(n||"ошибка")+"). Попробуй обновить страницу или открыть её в Chrome.";
+}
+async function start(mode,btn){
   const err=$("err");err.hidden=true;
-  document.querySelectorAll(".card .btn").forEach(b=>b.disabled=true);
-  initAudio();ac.resume();
+  const btns=document.querySelectorAll(".card .btn");
+  btns.forEach(b=>b.disabled=true);
+  const label=btn?.textContent;if(btn)btn.textContent="Включаю камеру…";
+  try{initAudio();ac.resume()}catch{}
   const pair=mode!=="solo";
   maxFaces=pair?1:2;
   try{
-    localStream=await navigator.mediaDevices.getUserMedia(pair
-      ?{video:{facingMode:"user",width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}},audio:{echoCancellation:true,noiseSuppression:true}}
-      :{video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false});
-    selfV.srcObject=localStream;await selfV.play();
-  }catch{
-    document.querySelectorAll(".card .btn").forEach(b=>b.disabled=false);
-    err.textContent=pair?"Нужен доступ к камере и микрофону. Разреши их в браузере и попробуй ещё раз.":"Камера недоступна. Разреши доступ к камере и попробуй ещё раз.";
-    err.hidden=false;return;
+    localStream=await getCamera(pair);
+    selfV.srcObject=localStream;selfV.play().catch(()=>{});
+  }catch(e){
+    btns.forEach(b=>b.disabled=false);if(btn)btn.textContent=label;
+    err.textContent=cameraError(e,pair);err.hidden=false;return;
   }
+  const noVoice=pair&&!localStream.getAudioTracks().length;
   if(pair)feedRecording("me",localStream);
   $("intro").hidden=true;$("dock").hidden=false;$("topbar").hidden=false;
-  flash("Загружаю распознавание лица… Тап по экрану уже выпускает сердечки");
+  flash(noVoice?"Микрофон не дали, поэтому звонок будет без твоего голоса. Сердечки работают":"Загружаю распознавание лица… Тап по экрану уже выпускает сердечки",noVoice?7000:4000);
   if(!running){running=true;requestAnimationFrame(loop)}
   const saved=await loadSound();
   if(saved){try{customBuf=await decode(saved.buf);showSoundState(saved.name)}catch{}}
@@ -766,9 +798,9 @@ async function start(mode){
     flash("Готово, чмокай!");
   }catch{flash("Не загрузилось распознавание лица. Проверь интернет. Тапом сердечки работают.")}
 }
-$("goPair").addEventListener("click",()=>start("pair"));
-$("goJoin").addEventListener("click",()=>start("pair"));
-$("goSolo").addEventListener("click",()=>start("solo"));
+$("goPair").addEventListener("click",e=>start("pair",e.currentTarget));
+$("goJoin").addEventListener("click",e=>start("pair",e.currentTarget));
+$("goSolo").addEventListener("click",e=>start("solo",e.currentTarget));
 </script>
 </body>
 </html>
