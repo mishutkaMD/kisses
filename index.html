@@ -7,14 +7,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Manrope:wght@400;600;700&display=swap">
 <style>
-/* Layout: full-bleed mirrored camera on canvas (this is what gets recorded); DOM controls float on top and never end up in the video */
+/* Layout: camera tiles are plain <video> elements (cheap for the phone); hearts live on one transparent canvas above them.
+   Solo: your camera full screen. Together on a phone: partner full screen, you in a corner window. Wide screen: two windows side by side. */
 :root{
   --ink:#fff6fb;
   --dim:#e9cfe0;
-  --glass:rgba(40,8,32,.55);
+  --glass:rgba(40,8,32,.6);
   --rose:#ff5fa8;
   --lilac:#b28cff;
   --rec:#ff3b5c;
+  --ok:#5be39a;
   --night:#14060f;
   --display:"Unbounded","Arial Black",system-ui,sans-serif;
   --body:"Manrope",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -22,12 +24,27 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--night);color:var(--ink);font-family:var(--body);overflow:hidden;-webkit-tap-highlight-color:transparent}
-canvas#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:manipulation}
-video#cam{display:none}
 [hidden]{display:none!important}
 
+video.tile{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;display:block}
+#self{transform:scaleX(-1)}
+#remote{display:none}
+body.paired #remote{display:block}
+/* телефон вертикально: она на весь экран, ты в углу */
+body.paired #self{
+  inset:auto;top:calc(64px + env(safe-area-inset-top,0px));right:16px;
+  width:min(30vw,170px);height:auto;aspect-ratio:3/4;max-width:100%;
+  border-radius:18px;border:2px solid rgba(255,255,255,.85);z-index:2;box-shadow:0 8px 24px rgba(0,0,0,.4)
+}
+/* широкий экран: два окна рядом */
+@media (min-aspect-ratio:1/1){
+  body.paired #self{inset:0 50% 0 0;top:0;right:50%;width:50%;height:100%;aspect-ratio:auto;border-radius:0;border:0;box-shadow:none}
+  body.paired #remote{left:50%;width:50%;border-left:2px solid var(--night)}
+}
+canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;touch-action:manipulation}
+
 .card{
-  position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;
   width:min(calc(100vw - 32px),420px);padding:28px 24px 24px;border-radius:28px;
   background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
   border:1px solid rgba(255,255,255,.14);
@@ -36,7 +53,7 @@ video#cam{display:none}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,8vw,38px);line-height:1.05;margin:0;text-wrap:balance;
   background:linear-gradient(100deg,#ffd1ea,var(--rose) 40%,var(--lilac) 75%,#9be7ff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .card p{margin:0;color:var(--dim);line-height:1.5;font-size:15px}
-.card ol{margin:0;padding-left:20px;color:var(--dim);line-height:1.6;font-size:14px}
+.card .btns{display:flex;flex-direction:column;gap:10px;margin-top:4px}
 .btn{
   appearance:none;border:0;cursor:pointer;
   font-family:var(--display);font-weight:600;font-size:15px;letter-spacing:.02em;
@@ -49,32 +66,46 @@ video#cam{display:none}
 .btn:disabled{opacity:.6;cursor:wait}
 .err{color:#ffb3c8;font-size:14px}
 
-.hint{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:16px;right:16px;text-align:center;font-size:14px;color:var(--ink);text-shadow:0 1px 8px rgba(0,0,0,.7);pointer-events:none;transition:opacity .6s}
-.timer{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:99px;background:rgba(0,0,0,.45);
+.topbar{position:fixed;z-index:5;left:0;right:0;top:0;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 0;
+  display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;pointer-events:none}
+.topbar>*{pointer-events:auto}
+.status{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:rgba(0,0,0,.45);font-size:13px;font-weight:700;white-space:nowrap}
+.status::before{content:"";width:9px;height:9px;border-radius:50%;background:#ffcf5a}
+.status.ok::before{background:var(--ok)}
+.timer{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;background:rgba(0,0,0,.45);
   font-family:var(--display);font-size:14px;font-variant-numeric:tabular-nums}
 .timer::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--rec);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.25}}
+.hint{position:fixed;z-index:5;top:calc(62px + env(safe-area-inset-top,0px));left:16px;right:16px;text-align:center;font-size:14px;color:var(--ink);text-shadow:0 1px 8px rgba(0,0,0,.8);pointer-events:none;transition:opacity .6s}
+
+.invite{position:fixed;z-index:6;left:50%;top:50%;transform:translate(-50%,-50%);width:min(calc(100vw - 32px),380px);
+  padding:20px;border-radius:24px;background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border:1px solid rgba(255,255,255,.14);display:flex;flex-direction:column;gap:12px;text-align:center}
+.invite b{font-family:var(--display);font-size:18px}
+.invite p{margin:0;color:var(--dim);font-size:14px;line-height:1.45}
+.invite code{font-size:13px;word-break:break-all;color:var(--ink);background:rgba(0,0,0,.35);padding:8px 10px;border-radius:10px;user-select:all}
 
 .dock{
-  position:fixed;left:0;right:0;bottom:0;
+  position:fixed;z-index:5;left:0;right:0;bottom:0;
   padding:12px 16px calc(16px + env(safe-area-inset-bottom,0px));
   display:flex;flex-direction:column;gap:14px;
-  background:linear-gradient(to top,rgba(20,6,15,.55),transparent);
+  background:linear-gradient(to top,rgba(20,6,15,.6),transparent);
 }
 .meterrow{display:flex;align-items:center;gap:10px}
-.meter{flex:1;height:8px;border-radius:99px;background:rgba(255,255,255,.18);overflow:hidden;position:relative}
+.meter{flex:1;min-width:0;height:8px;border-radius:99px;background:rgba(255,255,255,.18);overflow:hidden;position:relative}
 .meter i{position:absolute;inset:0 auto 0 0;width:0;border-radius:99px;background:linear-gradient(90deg,var(--lilac),var(--rose));transition:width .08s linear}
-.meter b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#fff;opacity:.8}
+.meter b{position:absolute;top:-3px;bottom:-3px;left:50%;width:2px;background:#fff;opacity:.8}
 .label{font-family:var(--display);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);text-shadow:0 1px 6px rgba(0,0,0,.6);white-space:nowrap;font-variant-numeric:tabular-nums}
 .controls{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
 .chip{
   appearance:none;cursor:pointer;justify-self:start;max-width:100%;
-  padding:10px 14px;border-radius:99px;border:1px solid rgba(255,255,255,.25);
-  background:rgba(0,0,0,.35);color:var(--ink);font-family:var(--body);font-weight:700;font-size:13px;
+  padding:9px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);
+  background:rgba(0,0,0,.4);color:var(--ink);font-family:var(--body);font-weight:700;font-size:13px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .chip.right{justify-self:end}
+.chip.sm{padding:7px 11px;font-size:12px}
+.sidecol{display:flex;flex-direction:column;gap:8px;align-items:flex-end;justify-self:end;min-width:0}
 .recbtn{
   appearance:none;cursor:pointer;width:76px;height:76px;border-radius:50%;
   border:5px solid #fff;background:transparent;padding:0;display:grid;place-items:center;
@@ -82,44 +113,64 @@ video#cam{display:none}
 .recbtn span{display:block;width:56px;height:56px;border-radius:50%;background:var(--rec);transition:all .2s}
 .recbtn.on span{width:28px;height:28px;border-radius:8px}
 
-.sheet{position:fixed;inset:0;background:rgba(10,2,8,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+.sheet{position:fixed;z-index:20;inset:0;background:rgba(10,2,8,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
   padding:calc(20px + env(safe-area-inset-top,0px)) 16px calc(20px + env(safe-area-inset-bottom,0px))}
 .sheet video{max-width:100%;max-height:62vh;border-radius:22px;background:#000}
 .sheet .row{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;width:min(100%,420px)}
 .sheet .row .btn{flex:1 1 140px}
 .sheet p{margin:0;color:var(--dim);font-size:13px;text-align:center;max-width:36ch;line-height:1.45}
 .sheet a.btn{text-decoration:none;text-align:center}
+@media (prefers-reduced-motion:reduce){.timer::before{animation:none}}
 </style>
 </head>
 <body>
-<video id="cam" playsinline muted autoplay></video>
-<canvas id="stage"></canvas>
+<video class="tile" id="remote" playsinline autoplay></video>
+<video class="tile" id="self" playsinline muted autoplay></video>
+<canvas id="fx"></canvas>
 
 <div class="card" id="intro">
   <h1>Чмок-пузыри</h1>
-  <p>Сложи губы для поцелуя, и из них вылетит целый веер красных сердечек со звуком «чмок». Работает для двоих в кадре. Запиши видео и отправь в Telegram.</p>
-  <ol>
-    <li>Включи камеру. Можно вдвоём, главное, чтобы оба лица были в кадре.</li>
-    <li>Красная кнопка — запись. Чмокай!</li>
-    <li>Стоп → «Отправить» → Telegram.</li>
-  </ol>
-  <button class="btn" id="go">Включить камеру</button>
+  <p id="introText">Сложи губы для поцелуя, и изо рта вылетит веер красных сердечек со звуком «чмок». Можно одному, а можно вдвоём онлайн: вы видите друг друга, и чмоки летят у обоих.</p>
+  <div class="btns" id="introBtns">
+    <button class="btn" id="goPair" type="button">Чмокаться вдвоём</button>
+    <button class="btn ghost" id="goSolo" type="button">Одному</button>
+  </div>
+  <div class="btns" id="joinBtns" hidden>
+    <button class="btn" id="goJoin" type="button">Войти и чмокаться</button>
+  </div>
   <p class="err" id="err" hidden></p>
 </div>
 
-<div class="hint" id="hint" hidden>Тап по экрану тоже выпускает сердце</div>
-<div class="timer" id="timer" hidden>0:00</div>
+<div class="topbar" id="topbar" hidden>
+  <button class="chip sm" id="leave" type="button">Выйти</button>
+  <div style="display:flex;justify-content:center;min-width:0">
+    <div class="status" id="status" hidden>Ждём…</div>
+    <div class="timer" id="timer" hidden>0:00</div>
+  </div>
+  <button class="chip sm right" id="linkBtn" type="button" hidden>Ссылка</button>
+</div>
+<div class="hint" id="hint" hidden></div>
+
+<div class="invite" id="invite" hidden>
+  <b>Позови её</b>
+  <p>Отправь эту ссылку в Telegram. Когда она откроет и нажмёт «Войти», вы увидите друг друга.</p>
+  <code id="roomUrl"></code>
+  <button class="btn" id="shareLink" type="button">Отправить ссылку</button>
+</div>
 
 <div class="dock" id="dock" hidden>
   <div class="meterrow">
     <span class="label">чмок</span>
-    <div class="meter"><i id="bar"></i><b id="thr"></b></div>
+    <div class="meter"><i id="bar"></i><b></b></div>
     <span class="label" id="count">♥ 0</span>
   </div>
   <div class="controls">
-    <button class="chip" id="soundBtn" type="button">Свой звук</button>
+    <button class="chip" id="sensBtn" type="button" title="Насколько легко срабатывает поцелуй">♡ Чутко</button>
     <button class="recbtn" id="rec" type="button" aria-label="Начать запись"><span></span></button>
-    <button class="chip right" id="resetSound" type="button" hidden>Встроенный</button>
+    <div class="sidecol">
+      <button class="chip right" id="soundBtn" type="button">Свой звук</button>
+      <button class="chip right sm" id="resetSound" type="button" hidden>Встроенный</button>
+    </div>
   </div>
   <input type="file" id="soundFile" accept="audio/*" hidden>
 </div>
@@ -137,25 +188,35 @@ video#cam{display:none}
 <script type="module">
 const VISION="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODEL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
-// Порог: выше ON — поцелуй, ниже OFF — губы расслаблены (гистерезис против дребезга)
-const ON=0.34, OFF=0.18, COOLDOWN=220;
-// Распознавание идёт на уменьшенной копии кадра — так в разы быстрее на телефоне
-const DET_LONG=320;
+const PEERJS="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js";
+const ROOM_PREFIX="chmokkiss-";
+// Распознавание идёт ~15 раз в секунду на маленькой копии кадра: этого хватает для поцелуя и сильно разгружает телефон
+const DET_LONG=256, DET_INTERVAL=66, COOLDOWN=200;
+// Насколько сильнее обычного должны сложиться губы, чтобы сработало
+const SENS=[{name:"Чутко",d:0.09},{name:"Средне",d:0.15},{name:"Строго",d:0.23}];
 
 const $=id=>document.getElementById(id);
-const video=$("cam"), cv=$("stage"), ctx=cv.getContext("2d");
+const selfV=$("self"), remoteV=$("remote"), cv=$("fx"), ctx=cv.getContext("2d");
 const bar=$("bar"), countEl=$("count");
-$("thr").style.left=(ON*100)+"%";
+const params=new URLSearchParams(location.search);
+const roomFromLink=(location.hash.match(/^#r-([a-z0-9]{4,12})$/)||[])[1]||null;
 
 let W=0,H=0,DPR=1;
 function resize(){
   W=innerWidth;H=innerHeight;
-  // ограничиваем разрешение, чтобы запись на телефоне не тормозила (~до 1280 по длинной стороне)
-  DPR=Math.min(window.devicePixelRatio||1,2,1280/Math.max(W,H));
+  DPR=Math.min(window.devicePixelRatio||1,1.5);
   cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 addEventListener("resize",resize);resize();
+
+function flash(msg,ms=4000){const h=$("hint");h.textContent=msg;h.hidden=false;h.style.opacity=1;clearTimeout(flash.t);flash.t=setTimeout(()=>h.style.opacity=0,ms)}
+
+let sens=0;
+try{const v=localStorage.getItem("chmok-sens");if(v!==null&&+v>=0&&+v<SENS.length)sens=+v}catch{}
+function showSens(){const b=$("sensBtn");b.textContent="♡ "+SENS[sens].name;b.setAttribute("aria-label","Чувствительность к поцелуям: "+SENS[sens].name)}
+showSens();
+$("sensBtn").addEventListener("click",()=>{sens=(sens+1)%SENS.length;showSens();try{localStorage.setItem("chmok-sens",sens)}catch{}});
 
 /* ================= ЗВУК ================= */
 let ac=null, master=null, recDest=null, customBuf=null;
@@ -167,6 +228,13 @@ function initAudio(){
   recDest=ac.createMediaStreamDestination();
   master.connect(recDest);
 }
+// голоса в звонке идут только в запись (в динамик их и так выводит видео)
+const recSources=new Map();
+function feedRecording(key,stream){
+  if(!ac||!stream||!stream.getAudioTracks().length)return;
+  try{recSources.get(key)?.disconnect()}catch{}
+  try{const src=ac.createMediaStreamSource(stream);src.connect(recDest);recSources.set(key,src)}catch{}
+}
 let noiseBuf=null;
 function noise(){
   if(noiseBuf)return noiseBuf;
@@ -174,25 +242,21 @@ function noise(){
   const d=noiseBuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
   return noiseBuf;
 }
-// встроенный «чмок» + «буль» пузыря, синтезируется на лету
-function synthKiss(){
+function synthKiss(vol=1){
   const t=ac.currentTime+0.005, p=0.9+Math.random()*0.2;
-  // чмок: короткий щелчок шума через полосовой фильтр
   const n=ac.createBufferSource();n.buffer=noise();
   const bp=ac.createBiquadFilter();bp.type="bandpass";bp.Q.value=1.4;
   bp.frequency.setValueAtTime(2200*p,t);bp.frequency.exponentialRampToValueAtTime(800*p,t+0.06);
-  const g=ac.createGain();g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(0.9,t+0.004);g.gain.exponentialRampToValueAtTime(0.001,t+0.07);
+  const g=ac.createGain();g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(0.9*vol,t+0.004);g.gain.exponentialRampToValueAtTime(0.001,t+0.07);
   n.connect(bp).connect(g).connect(master);n.start(t);n.stop(t+0.1);
-  // мягкий низкий «пх» губ
   const o=ac.createOscillator();o.type="sine";
   o.frequency.setValueAtTime(220*p,t);o.frequency.exponentialRampToValueAtTime(90,t+0.06);
-  const og=ac.createGain();og.gain.setValueAtTime(0.5,t);og.gain.exponentialRampToValueAtTime(0.001,t+0.07);
+  const og=ac.createGain();og.gain.setValueAtTime(0.5*vol,t);og.gain.exponentialRampToValueAtTime(0.001,t+0.07);
   o.connect(og).connect(master);o.start(t);o.stop(t+0.08);
-  // буль пузыря: восходящий тон
   const t2=t+0.07;
   const b=ac.createOscillator();b.type="sine";
   b.frequency.setValueAtTime(280*p,t2);b.frequency.exponentialRampToValueAtTime(1100*p,t2+0.14);
-  const bg=ac.createGain();bg.gain.setValueAtTime(0,t2);bg.gain.linearRampToValueAtTime(0.28,t2+0.02);bg.gain.exponentialRampToValueAtTime(0.001,t2+0.18);
+  const bg=ac.createGain();bg.gain.setValueAtTime(0,t2);bg.gain.linearRampToValueAtTime(0.28*vol,t2+0.02);bg.gain.exponentialRampToValueAtTime(0.001,t2+0.18);
   b.connect(bg).connect(master);b.start(t2);b.stop(t2+0.2);
 }
 function playKiss(){
@@ -208,21 +272,17 @@ function popSound(){
   const t=ac.currentTime+0.005;
   const o=ac.createOscillator();o.type="triangle";
   o.frequency.setValueAtTime(1400,t);o.frequency.exponentialRampToValueAtTime(500,t+0.05);
-  const g=ac.createGain();g.gain.setValueAtTime(0.12,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
+  const g=ac.createGain();g.gain.setValueAtTime(0.1,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
   o.connect(g).connect(master);o.start(t);o.stop(t+0.07);
 }
 
-// свой звук: хранится в браузере (IndexedDB), чтобы не загружать каждый раз
 const DB="chmok",STORE="s";
 function idb(){return new Promise((res,rej)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
 async function saveSound(name,buf){try{const db=await idb();db.transaction(STORE,"readwrite").objectStore(STORE).put({name,buf},"kiss")}catch{}}
 async function loadSound(){try{const db=await idb();return await new Promise(res=>{const r=db.transaction(STORE).objectStore(STORE).get("kiss");r.onsuccess=()=>res(r.result||null);r.onerror=()=>res(null)})}catch{return null}}
 async function clearSound(){try{const db=await idb();db.transaction(STORE,"readwrite").objectStore(STORE).delete("kiss")}catch{}}
 function decode(ab){return new Promise((res,rej)=>{const p=ac.decodeAudioData(ab.slice(0),res,rej);if(p&&p.then)p.then(res,rej)})}
-function showSoundState(name){
-  $("soundBtn").textContent=name?("♪ "+name):"Свой звук";
-  $("resetSound").hidden=!name;
-}
+function showSoundState(name){$("soundBtn").textContent=name?("♪ "+name):"Свой звук";$("resetSound").hidden=!name}
 $("soundBtn").addEventListener("click",()=>$("soundFile").click());
 $("soundFile").addEventListener("change",async e=>{
   const f=e.target.files[0];if(!f)return;
@@ -230,12 +290,35 @@ $("soundFile").addEventListener("change",async e=>{
   try{
     const ab=await f.arrayBuffer();
     customBuf=await decode(ab);
-    const name=f.name.replace(/\.[^.]+$/,"").slice(0,18);
+    const name=f.name.replace(/\.[^.]+$/,"").slice(0,16);
     showSoundState(name);saveSound(name,ab);playKiss();
   }catch{flash("Этот файл не получилось прочитать как звук. Попробуй m4a, mp3 или wav.")}
   e.target.value="";
 });
 $("resetSound").addEventListener("click",()=>{customBuf=null;showSoundState(null);clearSound();playKiss()});
+
+/* ================= ОКНА С КАМЕРАМИ ================= */
+// Координаты лица приходят в долях кадра камеры. Переводим их в точку на экране с учётом object-fit:cover и зеркала.
+function tileGeom(v){
+  const r=v.getBoundingClientRect(),vw=v.videoWidth||4,vh=v.videoHeight||3;
+  const k=Math.max(r.width/vw,r.height/vh);
+  return {r,dw:vw*k,dh:vh*k,mirror:v===selfV};
+}
+function toScreen(v,lx,ly){
+  const g=tileGeom(v);let px=(g.r.width-g.dw)/2+lx*g.dw;if(g.mirror)px=g.r.width-px;
+  return {x:g.r.left+px,y:g.r.top+(g.r.height-g.dh)/2+ly*g.dh,size:Math.min(g.r.width,g.r.height)};
+}
+function fromScreen(v,sx,sy){
+  const g=tileGeom(v);let px=sx-g.r.left;if(g.mirror)px=g.r.width-px;
+  return {x:(px-(g.r.width-g.dw)/2)/g.dw,y:(sy-g.r.top-(g.r.height-g.dh)/2)/g.dh};
+}
+function tileAt(sx,sy){
+  for(const v of paired?[selfV,remoteV]:[selfV]){
+    const r=v.getBoundingClientRect();
+    if(sx>=r.left&&sx<=r.right&&sy>=r.top&&sy<=r.bottom)return v;
+  }
+  return paired?remoteV:selfV;
+}
 
 /* ================= СЕРДЦА ================= */
 const HEART=[];
@@ -243,8 +326,7 @@ for(let i=0;i<=120;i++){
   const t=i/120*Math.PI*2;
   HEART.push([16*Math.sin(t)**3/17,(-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t))+2)/17]);
 }
-// Глянцевое красное сердце рисуется один раз в спрайт, потом просто масштабируется — так быстро даже на телефоне
-const SPR=256;
+const SPR=192;
 function makeSprite(base,mid,deep){
   const c=document.createElement("canvas");c.width=c.height=SPR;
   const g=c.getContext("2d"),s=SPR*0.46;
@@ -265,81 +347,73 @@ function makeSprite(base,mid,deep){
   g.fillStyle="rgba(255,255,255,.6)";g.beginPath();g.arc(-s*.18,-s*.56,s*.035,0,Math.PI*2);g.fill();
   return c;
 }
-const SPRITES=[
-  makeSprite("#ff5a6e","#e0102e","#8e0016"),
-  makeSprite("#ff4060","#d10a2a","#7a0014"),
-  makeSprite("#ff6f7d","#ec1c3a","#9a0a22"),
-];
+const SPRITES=[makeSprite("#ff5a6e","#e0102e","#8e0016"),makeSprite("#ff4060","#d10a2a","#7a0014"),makeSprite("#ff6f7d","#ec1c3a","#9a0a22")];
 
 const hearts=[],drops=[];
 let total=0;
 const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
-const BURST=7; // сердечек за один поцелуй
+const BURST=7;
 
-function burst(x,y){
-  const base=Math.min(W,H);
+// v — окно, из которого вылетают сердечки; lx,ly — рот в долях кадра этой камеры
+function burstAt(v,lx,ly){
+  const p=toScreen(v,lx,ly);
+  // в маленьком окошке сердечки всё равно делаем заметными
+  const base=Math.max(p.size,Math.min(W,H)*0.55);
   for(let i=0;i<BURST;i++){
-    // веер вверх: от -150° до -30°
     const a=-Math.PI/2+(i/(BURST-1)-.5)*Math.PI*0.7+(Math.random()-.5)*0.25;
-    const sp=H*(0.22+Math.random()*0.18);
+    const sp=base*(0.45+Math.random()*0.35);
     hearts.push({
-      x,y,size:base*(0.06+Math.random()*0.05),age:-i*0.035,
-      vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,
+      x:p.x,y:p.y,size:base*(0.06+Math.random()*0.05),age:-i*0.035,
+      vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,rise:base*0.07,
       rot:(Math.random()-.5)*0.6,spin:(Math.random()-.5)*1.2,
-      phase:Math.random()*6.28,life:2.4+Math.random()*1.4,
+      phase:Math.random()*6.28,life:2.2+Math.random()*1.3,
       spr:SPRITES[(Math.random()*SPRITES.length)|0]
     });
   }
   total++;countEl.textContent="♥ "+total;
   playKiss();
 }
+// мой поцелуй: показать у себя и отправить ей
+function myKiss(lx,ly){burstAt(selfV,lx,ly);send({t:"k",o:"s",x:lx,y:ly})}
 let lastPop=0;
 function pop(h){
-  for(let i=0;i<7;i++){
-    const a=i/7*Math.PI*2+Math.random()*.4,sp=50+Math.random()*90;
+  for(let i=0;i<6;i++){
+    const a=i/6*Math.PI*2+Math.random()*.4,sp=50+Math.random()*90;
     drops.push({x:h.x,y:h.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,r:1.5+Math.random()*2.2,life:.5,age:0});
   }
-  const n=performance.now();if(n-lastPop>120){lastPop=n;popSound()}
+  const n=performance.now();if(n-lastPop>140){lastPop=n;popSound()}
 }
 const easeOutBack=t=>{const c=1.7;return 1+(c+1)*(t-1)**3+c*(t-1)**2};
-
 function drawHeart(h,t){
   const grow=Math.min(1,h.age/0.22);
   const s=h.size*(0.2+0.8*easeOutBack(grow));
-  const beat=1+Math.max(0,Math.sin(t*7+h.phase))**8*0.12; // лёгкое «биение»
+  const beat=1+Math.max(0,Math.sin(t*7+h.phase))**8*0.12;
   const fade=h.age>h.life-0.3?Math.max(0,(h.life-h.age)/0.3):1;
   const d=s*2*beat/0.92;
-  ctx.save();
   ctx.globalAlpha=fade;
   ctx.translate(h.x,h.y);ctx.rotate(h.rot);
   ctx.drawImage(h.spr,-d/2,-d/2,d,d);
-  ctx.restore();
+  ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 
-/* ================= КАМЕРА → ХОЛСТ ================= */
-let map={ox:0,oy:0,dw:0,dh:0};
-function drawVideo(){
-  const vw=video.videoWidth,vh=video.videoHeight;
-  ctx.fillStyle="#14060f";ctx.fillRect(0,0,W,H);
-  if(!vw)return;
-  const k=Math.max(W/vw,H/vh),dw=vw*k,dh=vh*k,ox=(W-dw)/2,oy=(H-dh)/2;map={ox,oy,dw,dh};
-  ctx.save();ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(video,ox,oy,dw,dh);ctx.restore();
-}
-const toScreen=(lx,ly)=>({x:W-(map.ox+lx*map.dw),y:map.oy+ly*map.dh});
+/* ================= РАСПОЗНАВАНИЕ ================= */
+let landmarker=null,lastVT=-1,nextDetect=0,maxFaces=1;
+const det=document.createElement("canvas"),dctx=det.getContext("2d");
+const clamp01=v=>v<0?0:v>1?1:v;
+const slots=[];
+function newSlot(){return {x:.5,y:.5,ok:false,armed:true,lastFire:0,base:0,bb:-1,overSince:0,seen:0}}
+// первые полсекунды после появления лица только запоминаем, как выглядят губы в покое, и ничего не запускаем
+const WARMUP=900, HOLD=90;
 
-// До двух лиц. У каждого свой «слот» со своим состоянием, лица сопоставляются с прошлым кадром по ближайшему рту
-const MAX_FACES=2;
-const slots=Array.from({length:MAX_FACES},()=>({x:0,y:0,ok:false,armed:true,lastFire:0,base:0}));
 function assign(mouths){
-  const used=new Set(),out=new Array(MAX_FACES).fill(null);
-  // сначала даём каждому видимому слоту ближайший рот
+  while(slots.length<maxFaces)slots.push(newSlot());
+  const used=new Set(),out=new Array(maxFaces).fill(null);
   slots.forEach((s,si)=>{
     if(!s.ok)return;
     let best=-1,bd=Infinity;
     mouths.forEach((m,mi)=>{if(used.has(mi))return;const d=(m.x-s.x)**2+(m.y-s.y)**2;if(d<bd){bd=d;best=mi}});
     if(best>=0){used.add(best);out[si]=mouths[best]}
   });
-  // остальные рты — в свободные слоты
   mouths.forEach((m,mi)=>{
     if(used.has(mi))return;
     let si=out.findIndex((o,k)=>o===null&&!slots[k].ok);
@@ -349,105 +423,281 @@ function assign(mouths){
   return out;
 }
 
-let landmarker=null,lastVT=-1,prev=performance.now(),nextDetect=0;
-const det=document.createElement("canvas"),dctx=det.getContext("2d",{willReadFrequently:false});
-const clamp01=v=>v<0?0:v>1?1:v;
-
 function detect(now){
-  const vw=video.videoWidth,vh=video.videoHeight;
+  const vw=selfV.videoWidth,vh=selfV.videoHeight;
   const k=DET_LONG/Math.max(vw,vh);
   const w=Math.round(vw*k),h=Math.round(vh*k);
   if(det.width!==w||det.height!==h){det.width=w;det.height=h}
-  dctx.drawImage(video,0,0,w,h);
+  dctx.drawImage(selfV,0,0,w,h);
   const t0=performance.now();
   const r=landmarker.detectForVideo(det,now);
   const dur=performance.now()-t0;
-  // если телефон не успевает, пропускаем кадр распознавания, но анимацию рисуем всегда
-  nextDetect=dur>18?now+dur:0;
+  nextDetect=now+Math.min(Math.max(DET_INTERVAL,dur*1.5),110);
 
   const mouths=(r.faceLandmarks||[]).map((L,fi)=>{
-    const a=toScreen(L[13].x,L[13].y),b=toScreen(L[14].x,L[14].y);
     const bs=r.faceBlendshapes?.[fi]?.categories||[];
     const get=n=>bs.find(c=>c.categoryName===n)?.score||0;
-    const px=i=>[L[i].x*vw,L[i].y*vh];
-    const d=(i,j)=>{const[p,q]=[px(i),px(j)];return Math.hypot(p[0]-q[0],p[1]-q[1])};
+    const d=(i,j)=>Math.hypot((L[i].x-L[j].x)*vw,(L[i].y-L[j].y)*vh);
     return {
-      x:(a.x+b.x)/2,y:(a.y+b.y)/2,
+      x:(L[13].x+L[14].x)/2,y:(L[13].y+L[14].y)/2,
       blend:Math.max(get("mouthPucker"),get("mouthFunnel")*0.85),
       smile:Math.max(get("mouthSmileLeft"),get("mouthSmileRight")),
       jaw:get("jawOpen"),
-      ratio:d(61,291)/d(234,454) // ширина рта относительно ширины лица: при поцелуе заметно уменьшается
+      ratio:d(61,291)/d(234,454)
     };
   });
   const got=assign(mouths);
-  let maxP=0;
+  const D=SENS[sens].d;
+  let show=0;
   slots.forEach((s,i)=>{
     const m=got[i];
-    if(!m){s.ok=false;s.armed=true;s.base=0;return}
+    if(!m){s.ok=false;s.armed=true;s.base=0;s.bb=-1;s.overSince=0;s.seen=0;return}
+    if(!s.ok)s.seen=now;
     s.x=m.x;s.y=m.y;s.ok=true;
-    // запоминаем обычную ширину рта этого человека, пока он не целуется и не улыбается
+    const warm=now-s.seen<WARMUP;
+    // обычная ширина рта этого человека
     if(!s.base)s.base=m.ratio;
-    else if(m.blend<0.12&&m.smile<0.25&&m.jaw<0.25)s.base+=(m.ratio-s.base)*0.05;
-    const geom=m.smile>0.3?0:clamp01((s.base-m.ratio)/(s.base*0.3));
+    else if(warm)s.base+=(m.ratio-s.base)*0.3;
+    else if(m.blend<0.15&&m.smile<0.25&&m.jaw<0.25)s.base+=(m.ratio-s.base)*0.05;
+    const geom=(m.smile>0.3||m.jaw>0.25)?0:clamp01((s.base-m.ratio)/(s.base*0.3));
     const p=Math.max(m.blend,geom*0.8);
-    maxP=Math.max(maxP,p);
-    if(s.armed&&p>ON&&now-s.lastFire>COOLDOWN){burst(s.x,s.y);s.armed=false;s.lastFire=now}
-    if(p<OFF)s.armed=true;
+    // «спокойное» значение для этого лица: у кого-то губы и в покое немного вытянуты
+    if(s.bb<0)s.bb=p;
+    else if(warm)s.bb+=(p-s.bb)*0.3;
+    else if(p<s.bb+D*0.6)s.bb+=(p-s.bb)*0.06;
+    if(warm){s.armed=false;s.overSince=0;return}
+    const rise=p-s.bb;
+    show=Math.max(show,rise/(2*D));
+    // короткое «у»/«о» в разговоре не считается: губы должны держаться сложенными ~0,1 с, а сильный чмок срабатывает сразу
+    if(rise>D){if(!s.overSince)s.overSince=now}else s.overSince=0;
+    const fire=rise>Math.max(2*D,0.32)||(s.overSince&&now-s.overSince>=HOLD);
+    if(s.armed&&fire&&now-s.lastFire>COOLDOWN){myKiss(s.x,s.y);s.armed=false;s.lastFire=now}
+    if(rise<D*0.45)s.armed=true;
   });
-  bar.style.width=Math.min(100,maxP*100)+"%";
+  bar.style.width=Math.min(100,show*100)+"%";
 }
 
+/* ================= ГЛАВНЫЙ ЦИКЛ ================= */
+let prev=performance.now(),running=false;
 function loop(now){
   const dt=Math.min(.05,(now-prev)/1000);prev=now;const t=now/1000;
-  drawVideo();
-  if(landmarker&&video.readyState>=2&&video.currentTime!==lastVT&&now>=nextDetect){
-    lastVT=video.currentTime;
-    detect(now);
+  if(landmarker&&selfV.readyState>=2&&now>=nextDetect&&selfV.currentTime!==lastVT){
+    lastVT=selfV.currentTime;
+    try{detect(now)}catch{}
   }
+  ctx.clearRect(0,0,W,H);
   for(let i=hearts.length-1;i>=0;i--){
     const h=hearts[i];h.age+=dt;
     if(h.age<0)continue;
-    const sway=reduce?0:Math.sin(t*2.2+h.phase)*22;
+    const sway=reduce?0:Math.sin(t*2.2+h.phase)*h.size*0.6;
     h.x+=(h.vx+sway)*dt;h.y+=h.vy*dt;
-    h.vx*=0.985;h.vy=h.vy*0.985-H*0.035*dt; // замедляются и всплывают вверх
+    h.vx*=0.985;h.vy=h.vy*0.985-h.rise*dt;
     h.rot+=h.spin*dt;
     drawHeart(h,t);
     if(h.age>h.life||h.y<-h.size*2||h.x<-h.size*2||h.x>W+h.size*2){if(h.age>h.life)pop(h);hearts.splice(i,1)}
   }
+  ctx.globalAlpha=1;
   for(let i=drops.length-1;i>=0;i--){
     const d=drops[i];d.age+=dt;d.x+=d.vx*dt;d.y+=d.vy*dt;d.vy+=200*dt;
     const a=1-d.age/d.life;if(a<=0){drops.splice(i,1);continue}
     ctx.fillStyle=`rgba(235,20,50,${a})`;ctx.beginPath();ctx.arc(d.x,d.y,d.r,0,Math.PI*2);ctx.fill();
   }
+  if(recording)composeFrame();
   requestAnimationFrame(loop);
 }
-cv.addEventListener("pointerdown",e=>burst(e.clientX,e.clientY));
+// тап по окну — сердечки из этого места
+cv.addEventListener("pointerdown",e=>{
+  if(remoteV.paused&&paired)remoteV.play().catch(()=>{});
+  const v=tileAt(e.clientX,e.clientY);
+  const p=fromScreen(v,e.clientX,e.clientY);
+  if(v===selfV)myKiss(p.x,p.y);
+  else{burstAt(remoteV,p.x,p.y);send({t:"k",o:"r",x:p.x,y:p.y})}
+});
+
+/* ================= ВДВОЁМ: СВЯЗЬ ================= */
+let peer=null,conn=null,call=null,paired=false,roomCode=null,localStream=null,isHost=false;
+function setStatus(text,ok){const s=$("status");s.textContent=text;s.classList.toggle("ok",!!ok);s.hidden=recording}
+function send(msg){try{if(conn&&conn.open)conn.send(msg)}catch{}}
+// раз в 2 с шлём «я тут»; если от неё 7 с тишина — значит, она вышла
+let lastSeen=0;
+setInterval(()=>{
+  if(!conn)return;
+  send({t:"hb"});
+  if(paired&&performance.now()-lastSeen>7000)dropPartner();
+},2000);
+function onMsg(m){
+  lastSeen=performance.now();
+  if(!m||m.t!=="k")return;
+  const x=+m.x,y=+m.y;if(!isFinite(x)||!isFinite(y))return;
+  // o:"s" — это её поцелуй (из её окна), o:"r" — она тапнула по моему окну
+  if(m.o==="s"){if(paired)burstAt(remoteV,x,y);try{navigator.vibrate?.(40)}catch{}}
+  else burstAt(selfV,x,y);
+}
+function setPaired(on){
+  paired=on;document.body.classList.toggle("paired",on);
+  $("invite").hidden=on||!roomCode;
+  setStatus(on?"На связи":"Ждём её…",on);
+}
+function attachConn(c){
+  if(conn&&conn!==c){try{conn.close()}catch{}}
+  conn=c;lastSeen=performance.now();
+  c.on("open",()=>{lastSeen=performance.now()});
+  c.on("data",onMsg);
+  c.on("close",()=>{if(conn===c){conn=null;dropPartner()}});
+  c.on("error",()=>{});
+}
+function attachCall(c){
+  if(call&&call!==c){try{call.close()}catch{}}
+  call=c;
+  const pc=c.peerConnection;
+  if(pc)pc.addEventListener("iceconnectionstatechange",()=>{if(call===c&&(pc.iceConnectionState==="failed"||pc.iceConnectionState==="closed"))dropPartner()});
+  c.on("stream",st=>{
+    lastSeen=performance.now();
+    remoteV.srcObject=st;
+    remoteV.play().catch(()=>flash("Нажми на экран, чтобы включить звук",6000));
+    feedRecording("remote",st);
+    setPaired(true);
+    flash("Вы на связи! Чмокайте 💋");
+  });
+  c.on("close",()=>{if(call===c){call=null;dropPartner()}});
+  c.on("error",()=>{});
+}
+function dropPartner(){
+  if(!paired&&!call&&!conn)return;
+  try{call?.close()}catch{};try{conn?.close()}catch{}
+  call=null;conn=null;remoteV.srcObject=null;
+  setPaired(false);
+  if(!isHost){setStatus("Связь потерялась, переподключаюсь…");setTimeout(connectToHost,1500)}
+}
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+function peerOptions(){
+  const o={config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]}};
+  const ph=params.get("ph");if(ph){const [host,port]=ph.split(":");Object.assign(o,{host,port:+port||9000,path:"/",secure:false})}
+  return o;
+}
+function newCode(){const a="abcdefghjkmnpqrstuvwxyz23456789";let s="";for(let i=0;i<7;i++)s+=a[(Math.random()*a.length)|0];return s}
+function roomLink(){return location.origin+location.pathname+location.search+"#r-"+roomCode}
+
+// Кто первым открыл комнату, тот её «держит»; второй подключается к нему
+function openRoom(){
+  return new Promise(res=>{
+    const id=ROOM_PREFIX+roomCode;
+    const p=new Peer(id,peerOptions());
+    p.on("open",()=>{peer=p;isHost=true;res(true)});
+    p.on("error",e=>{
+      if(e.type==="unavailable-id"){try{p.destroy()}catch{};res(false);return}
+      if(peer===p)handlePeerError(e);else{try{p.destroy()}catch{};res(null)}
+    });
+    p.on("connection",attachConn);
+    p.on("call",c=>{c.answer(localStream);attachCall(c)});
+    p.on("disconnected",()=>{try{p.reconnect()}catch{}});
+  });
+}
+function joinAsGuest(){
+  return new Promise(res=>{
+    const p=new Peer(peerOptions());
+    p.on("open",()=>{peer=p;isHost=false;res(true);connectToHost()});
+    p.on("error",e=>{if(peer===p)handlePeerError(e);else res(null)});
+    p.on("disconnected",()=>{try{p.reconnect()}catch{}});
+  });
+}
+function connectToHost(){
+  if(!peer||isHost||paired)return;
+  const host=ROOM_PREFIX+roomCode;
+  attachConn(peer.connect(host,{reliable:true}));
+  attachCall(peer.call(host,localStream));
+}
+function handlePeerError(e){
+  if(e.type==="peer-unavailable"){
+    // хозяин комнаты пропал: занимаем комнату сами и ждём
+    try{peer.destroy()}catch{}
+    peer=null;
+    setStatus("Ждём её…");
+    openRoom().then(ok=>{if(ok===false)joinAsGuest()});
+    return;
+  }
+  if(e.type==="network"||e.type==="server-error"||e.type==="socket-error"){setStatus("Нет связи с сервером, пробую ещё раз…");return}
+  setStatus("Ошибка связи: "+e.type);
+}
+async function startRoom(){
+  await loadScript(PEERJS);
+  roomCode=roomFromLink||newCode();
+  if(!roomFromLink)history.replaceState(null,"","#r-"+roomCode);
+  $("roomUrl").textContent=roomLink();
+  $("linkBtn").hidden=false;$("status").hidden=false;
+  setStatus("Подключаюсь…");
+  let ok=await openRoom();
+  if(ok===false)ok=await joinAsGuest();
+  if(ok===null){setStatus("Не получилось подключиться. Обнови страницу");return}
+  setPaired(false);
+  if(!isHost)setStatus("Подключаюсь к ней…");
+}
+async function shareRoom(){
+  const url=roomLink();
+  try{if(navigator.share){await navigator.share({title:"Чмок 💋",text:"Заходи чмокаться 💋",url});return}}catch(e){if(e.name==="AbortError")return}
+  try{await navigator.clipboard.writeText(url);flash("Ссылка скопирована, отправь её в Telegram")}
+  catch{flash("Скопируй ссылку из окошка и отправь в Telegram")}
+}
+$("shareLink").addEventListener("click",shareRoom);
+$("linkBtn").addEventListener("click",shareRoom);
+$("leave").addEventListener("click",()=>{
+  try{call?.close();conn?.close();peer?.destroy()}catch{}
+  localStream?.getTracks().forEach(t=>t.stop());
+  location.href=location.pathname+location.search;
+});
 
 /* ================= ЗАПИСЬ ================= */
-let rec=null,chunks=[],recStart=0,timerId=0,lastFile=null,lastURL=null;
+// Во время записи склеиваем на один холст то, что видно на экране: камеры + сердечки
+const rc=document.createElement("canvas"),rctx=rc.getContext("2d");
+function composeFrame(){
+  const k=rc.width/W;
+  rctx.fillStyle="#14060f";rctx.fillRect(0,0,rc.width,rc.height);
+  const tiles=paired?[remoteV,selfV]:[selfV];
+  for(const v of tiles){
+    if(!v.videoWidth)continue;
+    const g=tileGeom(v);
+    const x=g.r.left*k,y=g.r.top*k,w=g.r.width*k,h=g.r.height*k;
+    rctx.save();
+    rctx.beginPath();
+    const rad=v===selfV&&paired&&g.r.width<W*0.45?18*k:0;
+    if(rctx.roundRect)rctx.roundRect(x,y,w,h,rad);else rctx.rect(x,y,w,h);
+    rctx.clip();
+    const dw=g.dw*k,dh=g.dh*k,ox=x+(w-dw)/2,oy=y+(h-dh)/2;
+    if(g.mirror){rctx.translate(x+w,0);rctx.scale(-1,1);rctx.drawImage(v,(x+w)-(ox+dw),oy,dw,dh)}
+    else rctx.drawImage(v,ox,oy,dw,dh);
+    rctx.restore();
+    if(rad){rctx.lineWidth=2*k;rctx.strokeStyle="rgba(255,255,255,.85)";rctx.beginPath();rctx.roundRect?rctx.roundRect(x,y,w,h,rad):rctx.rect(x,y,w,h);rctx.stroke()}
+  }
+  rctx.drawImage(cv,0,0,rc.width,rc.height);
+}
+let rec=null,chunks=[],recStart=0,timerId=0,lastFile=null,lastURL=null,recording=false;
 function pickType(){
   const list=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1,mp4a","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
   return list.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||"";
 }
 function startRec(){
   initAudio();if(ac.state==="suspended")ac.resume();
-  const stream=cv.captureStream(30);
+  const long=720;const s=long/Math.max(W,H);
+  rc.width=Math.round(W*s/2)*2;rc.height=Math.round(H*s/2)*2;
+  composeFrame();
+  const stream=rc.captureStream(30);
   recDest.stream.getAudioTracks().forEach(tr=>stream.addTrack(tr));
   const type=pickType();
-  try{rec=new MediaRecorder(stream,type?{mimeType:type,videoBitsPerSecond:3_500_000}:undefined)}
+  try{rec=new MediaRecorder(stream,type?{mimeType:type,videoBitsPerSecond:3_000_000}:undefined)}
   catch{flash("Этот браузер не умеет записывать видео. Попробуй Chrome или Safari.");return}
   chunks=[];
   rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
   rec.onstop=finishRec;
-  rec.start(250);
+  rec.start(250);recording=true;
   recStart=performance.now();
   $("rec").classList.add("on");$("rec").setAttribute("aria-label","Остановить запись");
-  $("timer").hidden=false;$("hint").hidden=true;
+  $("topbar").hidden=false;$("timer").hidden=false;$("status").hidden=true;$("hint").hidden=true;
   timerId=setInterval(()=>{const s=Math.floor((performance.now()-recStart)/1000);$("timer").textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},250);
 }
 function stopRec(){if(rec&&rec.state!=="inactive")rec.stop()}
 function finishRec(){
-  clearInterval(timerId);$("timer").hidden=true;$("timer").textContent="0:00";
+  recording=false;
+  clearInterval(timerId);$("timer").hidden=true;$("timer").textContent="0:00";$("status").hidden=!roomCode;
   $("rec").classList.remove("on");$("rec").setAttribute("aria-label","Начать запись");
   const type=(rec.mimeType||"video/webm").split(";")[0];
   const ext=type.includes("mp4")?"mp4":"webm";
@@ -462,41 +712,54 @@ function finishRec(){
   $("share").hidden=!canShare;$("shareNote").hidden=canShare;
   $("sheet").hidden=false;$("dock").hidden=true;
 }
-$("rec").addEventListener("click",()=>{rec&&rec.state==="recording"?stopRec():startRec()});
+$("rec").addEventListener("click",()=>{recording?stopRec():startRec()});
 $("share").addEventListener("click",async()=>{
   try{await navigator.share({files:[lastFile],title:"Чмок 💋"})}
   catch(e){if(e.name!=="AbortError")$("shareNote").hidden=false}
 });
 $("again").addEventListener("click",()=>{$("preview").pause();$("sheet").hidden=true;$("dock").hidden=false});
 
-function flash(msg){const h=$("hint");h.textContent=msg;h.hidden=false;h.style.opacity=1;clearTimeout(flash.t);flash.t=setTimeout(()=>h.style.opacity=0,4000)}
-
 /* ================= СТАРТ ================= */
-$("go").addEventListener("click",async()=>{
-  const go=$("go"),err=$("err");
-  go.disabled=true;go.textContent="Загружаю…";err.hidden=true;
+if(roomFromLink){
+  $("introText").textContent="Тебя зовут чмокаться 💋 Нажми «Войти», разреши камеру и микрофон, и вы увидите друг друга.";
+  $("introBtns").hidden=true;$("joinBtns").hidden=false;
+}
+async function start(mode){
+  const err=$("err");err.hidden=true;
+  document.querySelectorAll(".card .btn").forEach(b=>b.disabled=true);
   initAudio();ac.resume();
+  const pair=mode!=="solo";
+  maxFaces=pair?1:2;
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false});
-    video.srcObject=stream;await video.play();
+    localStream=await navigator.mediaDevices.getUserMedia(pair
+      ?{video:{facingMode:"user",width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}},audio:{echoCancellation:true,noiseSuppression:true}}
+      :{video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false});
+    selfV.srcObject=localStream;await selfV.play();
   }catch{
-    go.disabled=false;go.textContent="Включить камеру";
-    err.textContent="Камера недоступна. Разреши доступ к камере и открой страницу по https-ссылке.";err.hidden=false;return;
+    document.querySelectorAll(".card .btn").forEach(b=>b.disabled=false);
+    err.textContent=pair?"Нужен доступ к камере и микрофону. Разреши их в браузере и попробуй ещё раз.":"Камера недоступна. Разреши доступ к камере и попробуй ещё раз.";
+    err.hidden=false;return;
   }
-  $("intro").hidden=true;$("dock").hidden=false;
+  if(pair)feedRecording("me",localStream);
+  $("intro").hidden=true;$("dock").hidden=false;$("topbar").hidden=false;
   flash("Загружаю распознавание лица… Тап по экрану уже выпускает сердечки");
-  requestAnimationFrame(loop);
+  if(!running){running=true;requestAnimationFrame(loop)}
   const saved=await loadSound();
   if(saved){try{customBuf=await decode(saved.buf);showSoundState(saved.name)}catch{}}
+  if(pair)startRoom().catch(()=>setStatus("Не загрузилась связь. Проверь интернет"));
+  else{$("leave").textContent="Назад"}
   try{
     const {FaceLandmarker,FilesetResolver}=await import(VISION+"/vision_bundle.mjs");
     const files=await FilesetResolver.forVisionTasks(VISION+"/wasm");
-    const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numFaces:MAX_FACES,outputFaceBlendshapes:true});
+    const opts=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:"VIDEO",numFaces:maxFaces,outputFaceBlendshapes:true});
     try{landmarker=await FaceLandmarker.createFromOptions(files,opts("GPU"))}
     catch{landmarker=await FaceLandmarker.createFromOptions(files,opts("CPU"))}
     flash("Готово, чмокай!");
-  }catch{flash("Не загрузилось распознавание лица. Проверь интернет. Тапом сердца работают.")}
-});
+  }catch{flash("Не загрузилось распознавание лица. Проверь интернет. Тапом сердечки работают.")}
+}
+$("goPair").addEventListener("click",()=>start("pair"));
+$("goJoin").addEventListener("click",()=>start("pair"));
+$("goSolo").addEventListener("click",()=>start("solo"));
 </script>
 </body>
 </html>
