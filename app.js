@@ -6,7 +6,7 @@ if(window.top!==window.self){
   throw new Error("framed");
 }
 
-const VER="10";
+const VER="11";
 // Своя копия MediaPipe (vendor/). Модель лица — с сервера Google, но только если совпадает её отпечаток SHA-256.
 const VISION=new URL("vendor/mediapipe/",location.href).href;
 const MODEL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
@@ -360,6 +360,7 @@ cv.addEventListener("pointerdown",e=>{
 // Доказательство привязано к отпечаткам ключей шифрования, поэтому сервер связи не может встать посередине.
 let peer=null,conn=null,call=null,paired=false,roomId=null,roomSecret=null,localStream=null,isHost=false;
 let hmacKey=null,myCert=null,myFp=null,peerFp=null,authed=false,authedPeer=null;
+let badRetries=0;
 const ALPH="abcdefghijkmnpqrstuvwxyz23456789"; // 32 символа, без похожих l/o/0/1
 function randStr(n){const b=new Uint8Array(n);crypto.getRandomValues(b);let s="";for(const x of b)s+=ALPH[x&31];return s}
 const te=new TextEncoder();
@@ -423,7 +424,12 @@ function attachConn(c){
   const fail=why=>{
     try{c.close()}catch{}
     if(conn===c){conn=null;authed=false}
-    if(why==="bad"){flash(isHost?"Кто-то без правильной ссылки пытался зайти. Его не пустило":"Собеседник не прошёл проверку. Попроси новую ссылку",8000);if(!isHost)setStatus("Не удалось проверить собеседника")}
+    if(why==="bad"){
+      // гость пробует ещё пару раз: вдруг сбой связи, а не чужой ключ
+      if(!isHost&&badRetries<2){badRetries++;setStatus("Проверяю ещё раз…");setTimeout(connectToHost,2000);return}
+      flash(isHost?"Кто-то без правильной ссылки пытался зайти. Его не пустило":"Собеседник не прошёл проверку. Попроси новую ссылку",10000);
+      if(!isHost)setStatus("Не удалось проверить собеседника");
+    }
   };
   const timer=setTimeout(()=>{if(!st.ok)fail("timeout")},12000);
   const peerSeenFp=()=>sdpFp(c.peerConnection?.remoteDescription?.sdp);
@@ -458,7 +464,7 @@ function attachConn(c){
         try{c.send({t:"busy"})}catch{};setTimeout(()=>{try{c.close()}catch{}},800);return;
       }
       if(conn&&conn!==c){try{conn.close()}catch{}}
-      st.ok=true;conn=c;authed=true;authedPeer=c.peer;peerFp=pf;busy=false;
+      st.ok=true;conn=c;authed=true;authedPeer=c.peer;peerFp=pf;busy=false;badRetries=0;
       await sendProof();
       onAuthed();
       // хозяин проверил гостя → разрешает начать видео; гость, получив «go» раньше своей проверки, начинает сейчас
@@ -570,23 +576,18 @@ function loadScript(src){return new Promise((res,rej)=>{const s=document.createE
 
 // Серверы связи и ретрансляторы — только из белого списка SECURITY.md, статья 6. Ссылка их менять не может.
 const PEER_SERVER={host:"0.peerjs.com",port:443,path:"/",secure:true};
-const TURN_HOST="staticauth.openrelay.metered.ca", TURN_SECRET="openrelayprojectsecret";
-const STUN=[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun.cloudflare.com:3478"}];
-const LEGACY_TURN={urls:["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443?transport=tcp"],username:"openrelayproject",credential:"openrelayproject"};
+const STUN=[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun.cloudflare.com:3478"},{urls:"stun:stun.relay.metered.ca:80"}];
 let ICE=STUN;
+// ретранслятор Metered: настройки в relay-config.js
 async function buildIce(){
-  try{
-    const username=(Math.floor(Date.now()/1000)+12*3600)+":chmok";
-    const key=await crypto.subtle.importKey("raw",te.encode(TURN_SECRET),{name:"HMAC",hash:"SHA-1"},false,["sign"]);
-    const sig=new Uint8Array(await crypto.subtle.sign("HMAC",key,te.encode(username)));
-    const credential=btoa(String.fromCharCode(...sig));
-    return [...STUN,{urls:[
-      "turn:"+TURN_HOST+":80",
-      "turn:"+TURN_HOST+":80?transport=tcp",
-      "turn:"+TURN_HOST+":443",
-      "turns:"+TURN_HOST+":443?transport=tcp"
-    ],username,credential},LEGACY_TURN];
-  }catch{return [...STUN,LEGACY_TURN]}
+  const r=window.RELAY;
+  if(!r||!r.username||!r.credential||!/^[a-z0-9.-]+\.metered\.ca$/.test(r.host||""))return STUN;
+  return [...STUN,{urls:[
+    "turn:"+r.host+":80",
+    "turn:"+r.host+":80?transport=tcp",
+    "turn:"+r.host+":443",
+    "turns:"+r.host+":443?transport=tcp"
+  ],username:r.username,credential:r.credential}];
 }
 function peerOptions(){return {...PEER_SERVER,config:{iceServers:ICE,certificates:[myCert]}}}
 function roomLink(){return location.origin+location.pathname+"#r-"+roomId+"."+roomSecret}

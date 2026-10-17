@@ -5,8 +5,8 @@
 <!-- Правила безопасности: SECURITY.md. CSP ниже — белый список из статьи 6. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' https://storage.googleapis.com https://0.peerjs.com wss://0.peerjs.com; worker-src 'self' blob:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<meta name="app-version" content="10">
-<!-- для старых версий страницы, которые ищут новую версию по этой строке: const VER="10" -->
+<meta name="app-version" content="11">
+<!-- для старых версий страницы, которые ищут новую версию по этой строке: const VER="11" -->
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Чмок-пузыри</title>
 <style>
@@ -160,7 +160,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
     <p style="font-size:14px;color:var(--ink)">Нажми <b>⋮</b> или <b>···</b> вверху справа → «Открыть в браузере».</p>
   </div>
   <p class="err" id="err" hidden></p>
-  <p style="font-size:11px;opacity:.45;margin:0" id="ver">версия 10</p>
+  <p style="font-size:11px;opacity:.45;margin:0" id="ver">версия 11</p>
 </div>
 
 <div class="topbar" id="topbar" hidden>
@@ -209,6 +209,7 @@ canvas#fx{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:3;
   <p id="shareNote" hidden>Меню «Поделиться» здесь недоступно. Нажми «Сохранить» и отправь видео из галереи в Telegram.</p>
 </div>
 
-<script type="module" src="app.js?v=10"></script>
+<script src="relay-config.js?v=11"></script>
+<script type="module" src="app.js?v=11"></script>
 </body>
 </html>

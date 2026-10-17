@@ -1,11 +1,4 @@
 // Проверка ретрансляторов из белого списка SECURITY.md (статья 6)
-const OR_HOST="staticauth.openrelay.metered.ca", OR_SECRET="openrelayprojectsecret";
-async function orCred(){
-  const username=(Math.floor(Date.now()/1000)+3600)+":test";
-  const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(OR_SECRET),{name:"HMAC",hash:"SHA-1"},false,["sign"]);
-  const sig=new Uint8Array(await crypto.subtle.sign("HMAC",key,new TextEncoder().encode(username)));
-  return {username,credential:btoa(String.fromCharCode(...sig))};
-}
 function probe(server,relayOnly){
   return new Promise(res=>{
     const types={},errs=[];
@@ -21,15 +14,17 @@ function probe(server,relayOnly){
   });
 }
 (async()=>{
-  const c=await orCred();
+  if(!(window.RELAY&&window.RELAY.username)){document.getElementById("sum").textContent="Логин ретранслятора ещё не задан";}
+  const r=window.RELAY||{};
+  const c={username:r.username,credential:r.credential};
+  const H=r.host||"global.relay.metered.ca";
   const tests=[
     ["STUN Google (прямое соединение)",{urls:"stun:stun.l.google.com:19302"},false,"srflx"],
-    ["Open Relay UDP 80",{urls:"turn:"+OR_HOST+":80",...c},true,"relay"],
-    ["Open Relay TCP 80",{urls:"turn:"+OR_HOST+":80?transport=tcp",...c},true,"relay"],
-    ["Open Relay TCP 443",{urls:"turn:"+OR_HOST+":443?transport=tcp",...c},true,"relay"],
-    ["Open Relay TLS 443",{urls:"turns:"+OR_HOST+":443?transport=tcp",...c},true,"relay"],
-    ["Open Relay (старые пароли) 80",{urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},true,"relay"],
-    ["Open Relay (старые пароли) TCP 443",{urls:"turn:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"},true,"relay"]
+    ["STUN Metered",{urls:"stun:stun.relay.metered.ca:80"},false,"srflx"],
+    ["Metered UDP 80",{urls:"turn:"+H+":80",...c},true,"relay"],
+    ["Metered TCP 80",{urls:"turn:"+H+":80?transport=tcp",...c},true,"relay"],
+    ["Metered UDP 443",{urls:"turn:"+H+":443",...c},true,"relay"],
+    ["Metered TLS 443",{urls:"turns:"+H+":443?transport=tcp",...c},true,"relay"]
   ];
   const t=document.getElementById("t");
   const rows=tests.map(([name])=>{const tr=t.insertRow();tr.insertCell().textContent=name;const r=tr.insertCell();r.textContent="…";return r});
@@ -40,7 +35,7 @@ function probe(server,relayOnly){
     if(!ok&&r.errs.length)rows[i].title=r.errs.join("\n");
     return {name,ok,types:r.types,errs:r.errs.slice(0,3)};
   })));
-  const relays=out.filter(o=>o.ok&&o.name!==tests[0][0]);
+  const relays=out.filter(o=>o.ok&&o.name.startsWith("Metered"));
   document.getElementById("sum").textContent=relays.length?"Ретранслятор доступен: "+relays.map(r=>r.name).join(", "):"Ни один ретранслятор не доступен из этой сети";
   document.getElementById("sum").className=relays.length?"ok":"bad";
   window.__result=out;console.log("[turntest]",JSON.stringify(out));
